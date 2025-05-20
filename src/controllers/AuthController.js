@@ -4,12 +4,12 @@ const crypto = require("crypto");
 const prisma = require("../../prisma/client");
 require("dotenv").config();
 
-// const sessionSecrets = {};
+const sessionSecrets = {};
 
-// // Generate random JWT secret (temporary per session)
-// const generateRandomSecret = (length = 16) => {
-//     return crypto.randomBytes(length).toString("hex").slice(0, length);
-// };
+// Generate random JWT secret (temporary per session)
+const generateRandomSecret = (length = 16) => {
+    return crypto.randomBytes(length).toString("hex").slice(0, length);
+};
 
 exports.login = async (req, res) => {
     const { email, password } = req.body;
@@ -30,8 +30,8 @@ exports.login = async (req, res) => {
             return res.status(401).json({ message: "Invalid credentials" });
         }
 
-        // const secretKey = generateRandomSecret();
-        // sessionSecrets[user.id_users] = secretKey;
+        const secretKey = generateRandomSecret();
+        sessionSecrets[user.id_users] = secretKey;
 
         // Generate token
         const token = jwt.sign(
@@ -41,7 +41,7 @@ exports.login = async (req, res) => {
                 role: user.role,
                 id_department: user.id_department,
             },
-            process.env.JWT_SECRET,
+            secretKey,
             { expiresIn: "30m" }
         );
 

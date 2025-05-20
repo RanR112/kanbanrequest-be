@@ -2,7 +2,7 @@ const prisma = require("../../prisma/client");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
-// const { sessionSecrets } = require("../controllers/AuthController");
+const { sessionSecrets } = require("../controllers/AuthController");
 
 // JWT authentication middleware
 const authenticateToken = (req, res, next) => {
@@ -16,7 +16,7 @@ const authenticateToken = (req, res, next) => {
         const decodedPayload = jwt.decode(token);
         const userId = decodedPayload?.id_users;
 
-        // const secret = sessionSecrets[userId];
+        const secret = sessionSecrets[userId];
         if (!secret)
             return res
                 .status(403)
@@ -26,7 +26,7 @@ const authenticateToken = (req, res, next) => {
                 });
 
 require("dotenv").config();
-        const verified = jwt.verify(token, process.env.JWT_SECRET);
+        const verified = jwt.verify(token, secret);
         req.user = verified;
         next();
     } catch (err) {
