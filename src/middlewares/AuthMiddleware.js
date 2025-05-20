@@ -1,6 +1,8 @@
 const prisma = require("../../prisma/client");
 const jwt = require("jsonwebtoken");
-const { sessionSecrets } = require("../controllers/AuthController");
+require("dotenv").config();
+
+// const { sessionSecrets } = require("../controllers/AuthController");
 
 // JWT authentication middleware
 const authenticateToken = (req, res, next) => {
@@ -14,7 +16,7 @@ const authenticateToken = (req, res, next) => {
         const decodedPayload = jwt.decode(token);
         const userId = decodedPayload?.id_users;
 
-        const secret = sessionSecrets[userId];
+        // const secret = sessionSecrets[userId];
         if (!secret)
             return res
                 .status(403)
@@ -23,7 +25,8 @@ const authenticateToken = (req, res, next) => {
                     message: "Session not found. Please login again." 
                 });
 
-        const verified = jwt.verify(token, secret);
+require("dotenv").config();
+        const verified = jwt.verify(token, process.env.JWT_SECRET);
         req.user = verified;
         next();
     } catch (err) {
