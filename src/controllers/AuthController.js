@@ -6,10 +6,10 @@ require("dotenv").config();
 
 const sessionSecrets = {};
 
-// Generate random JWT secret (temporary per session)
-const generateRandomSecret = (length = 16) => {
-    return crypto.randomBytes(length).toString("hex").slice(0, length);
-};
+// // Generate random JWT secret (temporary per session)
+// const generateRandomSecret = (length = 16) => {
+//     return crypto.randomBytes(length).toString("hex").slice(0, length);
+// };
 
 exports.login = async (req, res) => {
     const { email, password } = req.body;
@@ -30,7 +30,7 @@ exports.login = async (req, res) => {
             return res.status(401).json({ message: "Invalid credentials" });
         }
 
-        const secretKey = generateRandomSecret();
+        const secretKey = process.env.JWT_SECRET;
         sessionSecrets[user.id_users] = secretKey;
 
         // Generate token
