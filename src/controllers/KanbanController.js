@@ -323,50 +323,75 @@ exports.approveKanban = async (req, res) => {
             });
 
             if (id_department === request.id_department) {
-                // Send to PC department staff
-                const staffPC = await prisma.user.findMany({
-                    where: {
-                        id_department: PC_DEPARTMENT_ID,
-                        role: "STAFF",
-                    },
-                });
-
-                for (const staff of staffPC) {
-                    // Check if record already exists before creating new one
-                    const existingRecord = await prisma.persetujuan.findUnique({
+                // Send to PC department staff - FIXED: Use explicit transaction
+                const pcTransaction = await prisma.$transaction(async (tx) => {
+                    const staffPC = await tx.user.findMany({
                         where: {
-                            id_users_id_department_id_kanban_role: {
-                                id_users: staff.id_users,
-                                id_department: PC_DEPARTMENT_ID,
-                                id_kanban,
-                                role: "STAFF",
-                            },
+                            id_department: PC_DEPARTMENT_ID,
+                            role: "STAFF",
                         },
                     });
 
-                    if (!existingRecord) {
-                        await prisma.persetujuan.create({
-                            data: {
-                                id_users: staff.id_users,
-                                id_department: PC_DEPARTMENT_ID,
-                                id_kanban,
-                                role: "STAFF",
-                                approve: false,
-                                note: NOTE.PENDING,
+                    const createPromises = [];
+                    const notificationPromises = [];
+
+                    for (const staff of staffPC) {
+                        // Check if record already exists
+                        const existingRecord = await tx.persetujuan.findUnique({
+                            where: {
+                                id_users_id_department_id_kanban_role: {
+                                    id_users: staff.id_users,
+                                    id_department: PC_DEPARTMENT_ID,
+                                    id_kanban,
+                                    role: "STAFF",
+                                },
                             },
+                        });
+
+                        if (!existingRecord) {
+                            createPromises.push(
+                                tx.persetujuan.create({
+                                    data: {
+                                        id_users: staff.id_users,
+                                        id_department: PC_DEPARTMENT_ID,
+                                        id_kanban,
+                                        role: "STAFF",
+                                        approve: false,
+                                        note: NOTE.PENDING,
+                                    },
+                                })
+                            );
+                        }
+
+                        // Prepare notification (will be sent after transaction)
+                        notificationPromises.push({
+                            staff,
+                            request
                         });
                     }
 
-                    await sendNotification(
-                        staff,
-                        request,
-                        "Request Kanban baru menunggu approval Anda (Staff PC)"
-                    );
+                    if (createPromises.length > 0) {
+                        await Promise.all(createPromises);
+                    }
+
+                    return notificationPromises;
+                });
+
+                // Send notifications after successful transaction
+                for (const { staff, request } of pcTransaction) {
+                    try {
+                        await sendNotification(
+                            staff,
+                            request,
+                            "Request Kanban baru menunggu approval Anda (Staff PC)"
+                        );
+                    } catch (notifError) {
+                        console.error("Notification error:", notifError);
+                        // Don't fail the whole operation for notification errors
+                    }
                 }
-            } else if (
-                role === "MANAGER" &&
-                id_department === PC_DEPARTMENT_ID
-            ) {
+
+            } else if (role === "MANAGER" && id_department === PC_DEPARTMENT_ID) {
                 // PC Manager approval case
                 const pcStaff = await prisma.user.findMany({
                     where: {
@@ -411,17 +436,19 @@ exports.approveKanban = async (req, res) => {
                         },
                     });
 
-                    const kanbanRequest = await prisma.requestKanban.findUnique(
-                        {
-                            where: { id_kanban },
-                        }
-                    );
+                    const kanbanRequest = await prisma.requestKanban.findUnique({
+                        where: { id_kanban },
+                    });
 
-                    await sendNotification(
-                        staff,
-                        kanbanRequest,
-                        "Request Kanban telah diapprove oleh Manager PC. Silakan klik DONE untuk menyelesaikan proses closure."
-                    );
+                    try {
+                        await sendNotification(
+                            staff,
+                            kanbanRequest,
+                            "Request Kanban telah diapprove oleh Manager PC. Silakan klik DONE untuk menyelesaikan proses closure."
+                        );
+                    } catch (notifError) {
+                        console.error("Notification error:", notifError);
+                    }
                 }
             }
         }
@@ -477,58 +504,68 @@ exports.approveKanban = async (req, res) => {
                     message: "Request Kanban telah di-closure oleh STAFF",
                 });
             } else {
-                // Add approval for SUPERVISOR and MANAGER PC
-                const pcManagers = await prisma.user.findMany({
-                    where: {
-                        id_department: PC_DEPARTMENT_ID,
-                        role: { in: APPROVAL_ROLES.PC_APPROVERS },
-                    },
-                });
-
-                await prisma.requestKanban.update({
-                    where: { id_kanban },
-                    data: {
-                        status: STATUS.PENDING_PC,
-                    },
-                });
-
-                for (const manager of pcManagers) {
-                    // Check if record already exists before creating new one
-                    const existingRecord = await prisma.persetujuan.findUnique({
+                // Use transaction for PC approvers creation
+                await prisma.$transaction(async (tx) => {
+                    // Add approval for SUPERVISOR and MANAGER PC
+                    const pcManagers = await tx.user.findMany({
                         where: {
-                            id_users_id_department_id_kanban_role: {
-                                id_users: manager.id_users,
-                                id_department: PC_DEPARTMENT_ID,
-                                id_kanban,
-                                role: manager.role,
-                            },
+                            id_department: PC_DEPARTMENT_ID,
+                            role: { in: APPROVAL_ROLES.PC_APPROVERS },
                         },
                     });
 
-                    if (!existingRecord) {
-                        await prisma.persetujuan.create({
-                            data: {
-                                id_users: manager.id_users,
-                                id_department: PC_DEPARTMENT_ID,
-                                id_kanban,
-                                role: manager.role,
-                                approve: false,
-                                note: NOTE.PENDING,
+                    await tx.requestKanban.update({
+                        where: { id_kanban },
+                        data: {
+                            status: STATUS.PENDING_PC,
+                        },
+                    });
+
+                    const createPromises = [];
+                    for (const manager of pcManagers) {
+                        // Check if record already exists
+                        const existingRecord = await tx.persetujuan.findUnique({
+                            where: {
+                                id_users_id_department_id_kanban_role: {
+                                    id_users: manager.id_users,
+                                    id_department: PC_DEPARTMENT_ID,
+                                    id_kanban,
+                                    role: manager.role,
+                                },
                             },
                         });
-                    }
-                }
 
-                await prisma.persetujuan.updateMany({
-                    where: {
-                        id_kanban,
-                        note: NOTE.PENDING_CLOSURE,
-                    },
-                    data: {
-                        approve: true,
-                        approvedAt: now,
-                        note: NOTE.CLOSURE,
-                    },
+                        if (!existingRecord) {
+                            createPromises.push(
+                                tx.persetujuan.create({
+                                    data: {
+                                        id_users: manager.id_users,
+                                        id_department: PC_DEPARTMENT_ID,
+                                        id_kanban,
+                                        role: manager.role,
+                                        approve: false,
+                                        note: NOTE.PENDING,
+                                    },
+                                })
+                            );
+                        }
+                    }
+
+                    if (createPromises.length > 0) {
+                        await Promise.all(createPromises);
+                    }
+
+                    await tx.persetujuan.updateMany({
+                        where: {
+                            id_kanban,
+                            note: NOTE.PENDING_CLOSURE,
+                        },
+                        data: {
+                            approve: true,
+                            approvedAt: now,
+                            note: NOTE.CLOSURE,
+                        },
+                    });
                 });
             }
         }
@@ -542,9 +579,10 @@ exports.approveKanban = async (req, res) => {
             approval,
         });
     } catch (error) {
-        console.error(error);
+        console.error("Approve Kanban Error:", error);
         res.status(500).json({
             message: "Terjadi kesalahan saat melakukan persetujuan",
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 };
@@ -557,6 +595,7 @@ exports.getMyRequests = async (req, res) => {
         const myRequests = await prisma.requestKanban.findMany({
             where: { id_users: req.user.id_users },
             include: { persetujuan: true },
+            orderBy: { id_kanban: 'desc' }, // Added ordering for consistency
         });
 
         res.json({ requests: myRequests });
@@ -625,36 +664,43 @@ exports.getIncomingForPC = async (req, res) => {
             "Auto-rejected: Rejected by PC",
         ];
 
+        // Enhanced query with explicit filtering
         const incoming = await prisma.persetujuan.findMany({
             where: {
                 id_users,
+                id_department: PC_DEPARTMENT_ID, // Explicitly check PC department
                 approve: false,
                 role: "STAFF",
                 note: { notIn: rejectedNotes },
-            },
-            include: {
                 requestKanban: {
-                    where: {
-                        status: {
-                            notIn: [
-                                STATUS.REJECTED_BY_DEPARTMENT,
-                                STATUS.REJECTED_BY_PC,
-                            ],
-                        },
+                    status: {
+                        notIn: [
+                            STATUS.REJECTED_BY_DEPARTMENT,
+                            STATUS.REJECTED_BY_PC,
+                        ],
                     },
                 },
             },
+            include: {
+                requestKanban: true,
+            },
+            orderBy: {
+                id_kanban: 'desc', // Added ordering
+            },
         });
 
-        // Filter out entries with null requestKanban
+        // Additional safety filter (though should not be needed with proper where clause)
         const filteredIncoming = incoming.filter(
             (item) => item.requestKanban !== null
         );
 
         res.json({ incoming: filteredIncoming });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Gagal mengambil data" });
+        console.error("Get Incoming for PC Error:", error);
+        res.status(500).json({ 
+            message: "Gagal mengambil data",
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 };
 
@@ -708,56 +754,63 @@ exports.rejectKanban = async (req, res) => {
                 ? NOTE.REJECTED_BY_PC
                 : NOTE.REJECTED_BY_DEPARTMENT;
 
-        // Update current user's approval to rejected
-        await prisma.persetujuan.update({
-            where: {
-                id_users_id_department_id_kanban_role: {
-                    id_users,
-                    id_department,
-                    id_kanban,
-                    role,
+        // Use transaction for consistency
+        await prisma.$transaction(async (tx) => {
+            // Update current user's approval to rejected
+            await tx.persetujuan.update({
+                where: {
+                    id_users_id_department_id_kanban_role: {
+                        id_users,
+                        id_department,
+                        id_kanban,
+                        role,
+                    },
                 },
-            },
-            data: {
-                approve: false,
-                note: alasan || rejectionNote,
-                approvedAt: new Date(),
-            },
+                data: {
+                    approve: false,
+                    note: alasan || rejectionNote,
+                    approvedAt: new Date(),
+                },
+            });
+
+            // Update kanban status
+            await tx.requestKanban.update({
+                where: { id_kanban },
+                data: {
+                    status,
+                },
+            });
+
+            // Update all pending approvals for this kanban to rejected
+            await tx.persetujuan.updateMany({
+                where: {
+                    id_kanban,
+                    approve: false,
+                    note: NOTE.PENDING,
+                },
+                data: {
+                    note: `Auto-rejected: ${alasan || rejectionNote}`,
+                },
+            });
         });
 
-        // Update kanban status
-        await prisma.requestKanban.update({
-            where: { id_kanban },
-            data: {
-                status,
-            },
-        });
-
-        // Update all pending approvals for this kanban to rejected
-        await prisma.persetujuan.updateMany({
-            where: {
-                id_kanban,
-                approve: false,
-                note: NOTE.PENDING,
-            },
-            data: {
-                note: `Auto-rejected: ${alasan || rejectionNote}`,
-            },
-        });
-
-        // Send notification to requesting user
+        // Send notification to requesting user (outside transaction)
         const requestUser = await prisma.user.findUnique({
             where: { id_users: request.id_users },
         });
 
         if (requestUser) {
-            await sendNotification(
-                requestUser,
-                request,
-                `Request Kanban Anda telah ditolak dengan alasan: ${
-                    alasan || rejectionNote
-                }`
-            );
+            try {
+                await sendNotification(
+                    requestUser,
+                    request,
+                    `Request Kanban Anda telah ditolak dengan alasan: ${
+                        alasan || rejectionNote
+                    }`
+                );
+            } catch (notifError) {
+                console.error("Notification error:", notifError);
+            }
         }
 
         res.json({
@@ -766,7 +819,10 @@ exports.rejectKanban = async (req, res) => {
             detail: "Semua approval yang pending untuk kanban ini telah diubah menjadi rejected",
         });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Gagal menolak request Kanban" });
+        console.error("Reject Kanban Error:", error);
+        res.status(500).json({ 
+            message: "Gagal menolak request Kanban",
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 };
