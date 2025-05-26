@@ -504,8 +504,9 @@ exports.approveKanban = async (req, res) => {
                     message: "Request Kanban telah di-closure oleh STAFF",
                 });
             } else {
-                // Use transaction for PC approvers creation
-                await prisma.$transaction(async (tx) => {
+                // === CASE: STAFF initial approval - Send to PC SUPERVISOR/MANAGER ===
+                // Use transaction for PC approvers creation and notifications
+                const notificationData = await prisma.$transaction(async (tx) => {
                     // Add approval for SUPERVISOR and MANAGER PC
                     const pcManagers = await tx.user.findMany({
                         where: {
@@ -522,6 +523,8 @@ exports.approveKanban = async (req, res) => {
                     });
 
                     const createPromises = [];
+                    const notificationPromises = [];
+
                     for (const manager of pcManagers) {
                         // Check if record already exists
                         const existingRecord = await tx.persetujuan.findUnique({
@@ -549,6 +552,12 @@ exports.approveKanban = async (req, res) => {
                                 })
                             );
                         }
+
+                        // Prepare notification data
+                        notificationPromises.push({
+                            user: manager,
+                            request: currentRequest
+                        });
                     }
 
                     if (createPromises.length > 0) {
@@ -566,7 +575,23 @@ exports.approveKanban = async (req, res) => {
                             note: NOTE.CLOSURE,
                         },
                     });
+
+                    return notificationPromises;
                 });
+
+                // Send notifications to PC SUPERVISOR and MANAGER after successful transaction
+                for (const { user, request } of notificationData) {
+                    try {
+                        await sendNotification(
+                            user,
+                            request,
+                            `Request Kanban telah diapprove oleh Staff PC dan memerlukan approval ${user.role} PC.`
+                        );
+                    } catch (notifError) {
+                        console.error("Notification error:", notifError);
+                        // Don't fail the whole operation for notification errors
+                    }
+                }
             }
         }
 

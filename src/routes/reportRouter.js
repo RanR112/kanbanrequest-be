@@ -2,16 +2,24 @@ const express = require("express");
 const reportRouter = express.Router();
 const { checkDepartmentAccess, authenticateToken } = require("../middlewares/AuthMiddleware");
 const {
-    getMonthlyReport,
-    downloadMonthlyReport,
-    getReportStatistics,
+    generateMonthlyReport,
+    getMonthlyReportJson,
+    generateFilteredReport,
+    getYearlyReportSummary,
+    getDepartmentPerformanceReport,
+    getReportFilterOptions,
+    getDashboardSummary,
 } = require("../controllers/ReportController");
 
 reportRouter.use(authenticateToken);
 reportRouter.use(checkDepartmentAccess);
 
-reportRouter.get("/monthly", getMonthlyReport);
-reportRouter.get("/monthly/download", downloadMonthlyReport);
-reportRouter.get("/statistics", getReportStatistics);
+reportRouter.get('/monthly-pdf', generateMonthlyReport);
+reportRouter.get('/monthly-json', getMonthlyReportJson);
+reportRouter.get('/filtered', generateFilteredReport);
+reportRouter.get('/yearly-summary', getYearlyReportSummary);
+reportRouter.get('/department-performance', getDepartmentPerformanceReport);
+reportRouter.get('/filter-options', getReportFilterOptions);
+reportRouter.get('/dashboard-summary', getDashboardSummary);
 
 module.exports = reportRouter;
